@@ -1,0 +1,198 @@
+// Digiturno — modelo de datos.
+// Estados, roles, canales y orígenes se guardan como String y se validan en
+// src/lib/constants.ts. Así el mismo esquema funciona en SQLite (dev) y PostgreSQL (prod).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Business {
+  id        String   @id @default(cuid())
+  name      String
+  logoUrl   String?
+  phone     String?
+  address   String?
+  // País por defecto para normalizar teléfonos escritos sin indicativo (ISO 3166-1 alpha-2)
+  country   String   @default("CO")
+  timezone  String   @default("America/Bogota")
+
+  // Configuración visual (pantalla pública y seguimiento)
+  brandColor String @default("#4f46e5")
+
+  // Pedidos
+  orderPrefix       String  @default("")
+  numberingMode     String  @default("MANUAL") // MANUAL | AUTO
+  dailyReset        Boolean @default(true)
+  orderCounter      Int     @default(0)
+  orderCounterDate  String? // YYYY-MM-DD (zona del negocio) del último número automático
+  requirePhone      Boolean @default(true) // modo notificación activo → celular obligatorio
+
+  // Notificaciones
+  smsEnabled       Boolean @default(true)
+  telegramEnabled  Boolean @default(false)
+  whatsappEnabled  Boolean @default(false) // futuro
+  smsTemplate      String  @default("Tu pedido #{order_id} está listo. Puedes pasar a recogerlo. Gracias por tu compra. {business_name}")
+
+  // Token secreto de la pantalla pública: /business/{id}/display/{displayToken}
+  displayToken String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  customers     Customer[]
+  orders        Order[]
+  notifications Notification[]
+  consents      Consent[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  businessId   String
+  business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         String // ADMIN | CASHIER | KITCHEN
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+
+  @@index([businessId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Cliente dentro de un negocio. El teléfono E.164 es la identidad común del
+// ecosistema (Digiturno, WhatsOrder, Pass2One, Domi911).
+model Customer {
+  id             String   @id @default(cuid())
+  businessId     String
+  business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  phone          String // SIEMPRE normalizado E.164, ej. +573155551234
+  name           String?
+  telegramChatId String? // se llena cuando el cliente inicia el bot de Telegram
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orders        Order[]
+  notifications Notification[]
+  consent       Consent?
+
+  @@unique([businessId, phone])
+}
+
+model Order {
+  id              String    @id @default(cuid())
+  businessId      String
+  business        Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customerId      String?
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  orderNumber     String // número visible: "583", "A583"
+  externalOrderId String?
+  source          String    @default("MANUAL") // MANUAL | WHATSORDER | POS | BILLING | API
+  status          String    @default("NEW") // NEW | PREPARING | READY | DELIVERED | CANCELLED
+  notify          Boolean   @default(true) // el cliente quiere ser avisado
+  trackingToken   String    @unique // token del link/QR público de seguimiento
+  createdAt       DateTime  @default(now())
+  preparingAt     DateTime?
+  readyAt         DateTime?
+  deliveredAt     DateTime?
+  cancelledAt     DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  notifications Notification[]
+
+  @@unique([businessId, source, externalOrderId])
+  @@index([businessId, status])
+  @@index([businessId, createdAt])
+}
+
+model Notification {
+  id                String    @id @default(cuid())
+  businessId        String
+  business          Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orderId           String
+  order             Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId        String?
+  customer          Customer? @relation(fields: [customerId], references: [id])
+  channel           String // SMS | TELEGRAM | WHATSAPP
+  status            String    @default("PENDING") // PENDING | SENT | DELIVERED | FAILED
+  provider          String?
+  providerMessageId String?
+  message           String
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  errorMessage      String?
+  createdAt         DateTime  @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([orderId])
+}
+
+// Consentimiento vigente por cliente y negocio. Cada cambio queda además en AuditLog.
+// Transaccional (avisos del pedido) y marketing son autorizaciones INDEPENDIENTES.
+model Consent {
+  id                   String    @id @default(cuid())
+  businessId           String
+  business             Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customerId           String    @unique
+  customer             Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  notificationConsent  Boolean   @default(false)
+  notificationConsentAt DateTime?
+  marketingConsent     Boolean   @default(false)
+  marketingConsentAt   DateTime?
+  consentDate          DateTime  @default(now()) // último cambio
+  consentSource        String // MANUAL:<userId> | API:<apiKeyId> | ...
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([businessId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name       String
+  source     String    @default("API") // origen con el que se registran los pedidos creados con esta key
+  prefix     String // primeros caracteres, para identificarla en la UI
+  keyHash    String    @unique // SHA-256 de la key completa; la key nunca se guarda
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([businessId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  actor      String // user:<id> | apikey:<id> | public | system
+  action     String // ej. order.created, order.status_changed, consent.updated
+  entityType String?
+  entityId   String?
+  metadata   String? // JSON
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([businessId, createdAt])
+}
