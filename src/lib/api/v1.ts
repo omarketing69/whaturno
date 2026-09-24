@@ -8,7 +8,7 @@ import { trackingUrl } from "../config";
 import { maskPhone } from "../phone";
 import { DomainError } from "@/domain/errors";
 
-export type ApiContext = { key: ApiKey; ip: string };
+export type ApiContext = { key: ApiKey & { business: { status: string } }; ip: string };
 
 export function apiError(status: number, code: string, message: string, headers?: HeadersInit) {
   return NextResponse.json({ error: { code, message } }, { status, headers });
@@ -20,6 +20,7 @@ export async function withApiKey(req: Request, handler: (ctx: ApiContext) => Pro
   if (!rateLimit(`api-ip:${ip}`, 600, 60_000).ok) return apiError(429, "RATE_LIMITED", "Demasiadas solicitudes");
   const key = await authenticateApiKey(req.headers);
   if (!key) return apiError(401, "UNAUTHORIZED", "API key inválida o ausente. Usa 'Authorization: Bearer <key>'.");
+  if (key.business.status !== "ACTIVE") return apiError(403, "SUSPENDED", "La cuenta del negocio está suspendida");
   const limit = rateLimit(`api-key:${key.id}`, 300, 60_000);
   if (!limit.ok) return apiError(429, "RATE_LIMITED", "Demasiadas solicitudes", { "Retry-After": String(limit.retryAfter) });
   try {

@@ -3,8 +3,11 @@ import { randomToken } from "@/lib/tokens";
 import { NotificationService } from "@/domain/notifications/NotificationService";
 import type { SendResult, SmsProvider } from "@/domain/notifications/types";
 
-export async function makeBusiness(data: Partial<{ name: string; numberingMode: string; orderPrefix: string; requirePhone: boolean }> = {}) {
-  return prisma.business.create({ data: { name: data.name ?? "Negocio " + randomToken(4), displayToken: randomToken(), ...data } });
+export async function makeBusiness(
+  data: Partial<{ name: string; numberingMode: string; orderPrefix: string; requirePhone: boolean; smsExtraBalance: number; planId: string; timezone: string }> = {},
+) {
+  // Por defecto con saldo de SMS para que las pruebas de notificación no dependan del billing
+  return prisma.business.create({ data: { name: data.name ?? "Negocio " + randomToken(4), displayToken: randomToken(), smsExtraBalance: 1000, ...data } });
 }
 
 export class FakeSms implements SmsProvider {

@@ -2,6 +2,7 @@ import type { Notification, PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/db";
 import { trackingUrl } from "@/lib/config";
 import type { Channel } from "@/lib/constants";
+import { refundSmsCredit, reserveSmsCredit } from "../billing/credits";
 import { renderTemplate } from "./template";
 import type { SendResult, SmsProvider, TelegramProvider, WhatsAppProvider } from "./types";
 import { smsProviderFromEnv } from "./providers/sms";
@@ -56,6 +57,15 @@ export class NotificationService {
     }
   }
 
+  /** SMS que consume 1 crédito del negocio; si el proveedor falla, el crédito se devuelve. */
+  async sendBilledSMS(businessId: string, phone: string, message: string, notificationId?: string): Promise<SendResult> {
+    const bucket = await reserveSmsCredit(this.db, businessId, notificationId);
+    if (!bucket) return { ok: false, provider: "billing", error: "Sin créditos SMS. Solicita una recarga." };
+    const result = await this.sendSMS(phone, message);
+    if (!result.ok) await refundSmsCredit(this.db, businessId, bucket, notificationId);
+    return result;
+  }
+
   sendTelegram(chatId: string, message: string): Promise<SendResult> {
     return this.telegram.send(chatId, message);
   }
@@ -75,6 +85,7 @@ export class NotificationService {
     if (!order.customer.consent?.notificationConsent) return null;
 
     const { business, customer } = order;
+    if (business.status !== "ACTIVE") return null;
     const message = renderTemplate(business.smsTemplate, {
       order_id: order.orderNumber,
       business_name: business.name,
@@ -96,7 +107,7 @@ export class NotificationService {
         channel === "TELEGRAM"
           ? await this.sendTelegram(customer.telegramChatId!, message)
           : channel === "SMS"
-            ? await this.sendSMS(customer.phone, message)
+            ? await this.sendBilledSMS(business.id, customer.phone, message, last.id)
             : await this.sendWhatsApp(customer.phone, message);
 
       last = await this.db.notification.update({

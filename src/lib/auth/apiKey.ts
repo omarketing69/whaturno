@@ -17,7 +17,7 @@ export async function authenticateApiKey(headers: Headers) {
   const auth = headers.get("authorization") ?? "";
   const key = auth.startsWith("Bearer ") ? auth.slice(7).trim() : headers.get("x-api-key")?.trim();
   if (!key || !key.startsWith(PREFIX)) return null;
-  const record = await prisma.apiKey.findUnique({ where: { keyHash: sha256(key) } });
+  const record = await prisma.apiKey.findUnique({ where: { keyHash: sha256(key) }, include: { business: { select: { status: true } } } });
   if (!record || record.revokedAt) return null;
   // Actualización "best effort", no bloquea la request
   prisma.apiKey.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => {});

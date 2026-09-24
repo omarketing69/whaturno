@@ -30,7 +30,8 @@ export async function signup(_: FormState, form: FormData): Promise<FormState> {
   if (await prisma.user.findUnique({ where: { email } })) return { error: "Ya existe una cuenta con ese correo" };
 
   const user = await prisma.$transaction(async (tx) => {
-    const business = await tx.business.create({ data: { name: businessName, displayToken: randomToken() } });
+    const plan = await tx.plan.findFirst({ where: { isDefault: true, active: true } });
+    const business = await tx.business.create({ data: { name: businessName, displayToken: randomToken(), planId: plan?.id } });
     return tx.user.create({
       data: { businessId: business.id, name, email, passwordHash: await hashPassword(password), role: "ADMIN" },
     });
@@ -61,6 +62,7 @@ export async function login(_: FormState, form: FormData): Promise<FormState> {
   }
   await createSession(user.id);
   await audit({ businessId: user.businessId, actor: `user:${user.id}`, action: "user.login", ip });
+  // Si el negocio está suspendido, requireUser lo lleva a /suspended
   redirect(homeFor(user.role as Role));
 }
 

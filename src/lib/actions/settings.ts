@@ -98,9 +98,9 @@ export async function sendTestSms(_: FormState, form: FormData): Promise<FormSta
   const phone = normalizePhone(String(form.get("phone") ?? ""), business.country);
   if (!phone) return { error: "Número no válido" };
   const message = renderTemplate(business.smsTemplate, { order_id: "123", business_name: business.name, customer_name: "Cliente", tracking_url: "" });
-  const result = await notificationService().sendSMS(phone, message);
+  const result = await notificationService().sendBilledSMS(business.id, phone, message);
   await log(user.id, user.businessId, "notifications.test_sms", { ok: result.ok, provider: result.provider });
-  return result.ok ? { ok: true, message: `SMS de prueba enviado (${result.provider})` } : { error: `No se pudo enviar: ${result.error}` };
+  return result.ok ? { ok: true, message: `SMS de prueba enviado (${result.provider}). Consumió 1 crédito.` } : { error: `No se pudo enviar: ${result.error}` };
 }
 
 const userSchema = z.object({
@@ -163,4 +163,24 @@ export async function revokeApiKey(keyId: string) {
   const { count } = await prisma.apiKey.updateMany({ where: { id: keyId, businessId: user.businessId, revokedAt: null }, data: { revokedAt: new Date() } });
   if (count) await log(user.id, user.businessId, "apikey.revoked", { apiKeyId: keyId });
   revalidatePath("/settings");
+}
+
+const creditRequestSchema = z.object({
+  amount: z.coerce.number().int("Cantidad no válida").min(100, "Mínimo 100 SMS").max(100_000, "Máximo 100.000 SMS"),
+  note: z.string().trim().max(200).optional(),
+});
+
+/** El negocio pide una recarga; el superadmin la aprueba al recibir el pago. */
+export async function requestCredits(_: FormState, form: FormData): Promise<FormState> {
+  const user = await admin();
+  const parsed = creditRequestSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success) return fail(parsed.error);
+  const pending = await prisma.creditRequest.count({ where: { businessId: user.businessId, status: "PENDING" } });
+  if (pending >= 3) return { error: "Ya tienes 3 solicitudes pendientes. Espera a que se procesen." };
+  const request = await prisma.creditRequest.create({
+    data: { businessId: user.businessId, amount: parsed.data.amount, note: parsed.data.note || null, requestedBy: user.id },
+  });
+  await log(user.id, user.businessId, "credits.requested", { requestId: request.id, amount: request.amount });
+  revalidatePath("/settings");
+  return { ok: true, message: "Solicitud enviada. Te confirmaremos cuando se acrediten los SMS." };
 }

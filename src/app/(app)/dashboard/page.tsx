@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/session";
 import { dateRange } from "@/lib/time";
 import { displayUrl } from "@/lib/config";
+import { getCreditSummary } from "@/domain/billing/credits";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ export default async function DashboardPage() {
     prisma.notification.count({ where: { businessId, createdAt: { gte: from }, status: "FAILED" } }),
   ]);
 
+  const credits = await getCreditSummary(prisma, businessId);
   const avgWait = readyToday.length
     ? Math.round(readyToday.reduce((sum, o) => sum + (o.readyAt!.getTime() - o.createdAt.getTime()), 0) / readyToday.length / 60000)
     : null;
@@ -35,6 +37,7 @@ export default async function DashboardPage() {
     { label: "Entregados", value: delivered, hint: "Hoy", tone: "text-slate-900" },
     { label: "Tiempo promedio", value: avgWait === null ? "—" : `${avgWait} min`, hint: "Del registro a listo, hoy", tone: "text-slate-900" },
     { label: "Notificaciones", value: notificationsSent, hint: notificationsFailed ? `${notificationsFailed} fallidas hoy` : "Enviadas hoy", tone: "text-slate-900" },
+    { label: "SMS disponibles", value: credits.available.toLocaleString("es-CO"), hint: credits.plan ? `Plan ${credits.plan.name}` : "Sin plan", tone: credits.low ? "text-red-600" : "text-slate-900" },
   ];
 
   return (
@@ -46,6 +49,13 @@ export default async function DashboardPage() {
         </div>
         <Link href="/orders/new" className="btn-primary px-6 py-3">+ Nuevo pedido</Link>
       </div>
+
+      {credits.low && (
+        <Link href="/settings?tab=plan" className="mb-4 flex items-center justify-between gap-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 hover:bg-amber-100">
+          <span>{credits.available === 0 ? "Te quedaste sin SMS: los clientes no recibirán el aviso." : `Te quedan ${credits.available} SMS.`}</span>
+          <strong className="whitespace-nowrap">Solicitar recarga →</strong>
+        </Link>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
         {stats.map((s) => (

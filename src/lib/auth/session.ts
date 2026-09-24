@@ -35,6 +35,7 @@ export type SessionUser = {
   email: string;
   role: Role;
   businessId: string;
+  businessActive: boolean;
 };
 
 /** Usuario autenticado o null. Cacheado por request. */
@@ -43,17 +44,18 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   if (!token) return null;
   const session = await prisma.session.findUnique({
     where: { tokenHash: sha256(token) },
-    include: { user: true },
+    include: { user: { include: { business: { select: { status: true } } } } },
   });
   if (!session || session.expiresAt < new Date() || !session.user.active) return null;
   const { id, name, email, role, businessId } = session.user;
-  return { id, name, email, role: role as Role, businessId };
+  return { id, name, email, role: role as Role, businessId, businessActive: session.user.business.status === "ACTIVE" };
 });
 
 /** Para páginas: redirige a /login o a la página de inicio de su rol si no tiene permiso. */
 export async function requireUser(roles?: Role[]): Promise<SessionUser> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  if (!user.businessActive) redirect("/suspended");
   if (roles && !roles.includes(user.role)) redirect(homeFor(user.role));
   return user;
 }

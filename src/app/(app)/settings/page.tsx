@@ -5,12 +5,15 @@ import { requireUser } from "@/lib/auth/session";
 import { appUrl, displayUrl } from "@/lib/config";
 import { ROLE_LABEL, SOURCE_LABEL, type OrderSource, type Role } from "@/lib/constants";
 import { formatDate } from "@/lib/time";
+import { getCreditSummary } from "@/domain/billing/credits";
+import { TX_LABEL } from "@/domain/billing/overview";
 import { INTEGRATIONS } from "@/domain/ecosystem";
 import { TEMPLATE_VARIABLES } from "@/domain/notifications/template";
 import {
   createUser,
   regenerateDisplayToken,
   revokeApiKey,
+  requestCredits,
   sendTestSms,
   toggleUserActive,
   updateBusiness,
@@ -20,7 +23,7 @@ import {
 import { ActionForm } from "@/components/ActionForm";
 import { SubmitButton } from "@/components/ui";
 import { ApiKeyForm } from "./ApiKeyForm";
-import { ConfirmButton } from "./ConfirmButton";
+import { ConfirmButton } from "@/components/ConfirmButton";
 
 export const metadata: Metadata = { title: "Configuración" };
 export const dynamic = "force-dynamic";
@@ -29,6 +32,7 @@ const TABS = [
   { key: "negocio", label: "Negocio" },
   { key: "pedidos", label: "Pedidos" },
   { key: "notificaciones", label: "Notificaciones" },
+  { key: "plan", label: "Plan y créditos" },
   { key: "usuarios", label: "Usuarios" },
   { key: "pantalla", label: "Pantalla pública" },
   { key: "integraciones", label: "Integraciones" },
@@ -132,7 +136,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <>
             <Section title="Canales" description="SMS es el canal principal: funciona en cualquier celular.">
               <ActionForm action={updateNotifications}>
-                <Toggle name="smsEnabled" label="SMS" hint={`Proveedor: ${process.env.SMS_PROVIDER || "console"}`} defaultChecked={b.smsEnabled} />
+                <Toggle name="smsEnabled" label="SMS" hint="Cada mensaje consume 1 crédito de tu plan." defaultChecked={b.smsEnabled} />
                 <Toggle name="telegramEnabled" label="Telegram (opcional)" hint="Solo para clientes que inicien el bot desde su link de seguimiento. Si falla, se usa SMS." defaultChecked={b.telegramEnabled} />
                 <Toggle name="whatsappEnabled" label="WhatsApp — Próximamente" disabled />
                 <div>
@@ -143,7 +147,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <SubmitButton>Guardar</SubmitButton>
               </ActionForm>
             </Section>
-            <Section title="Probar SMS" description="Envía el mensaje con datos de ejemplo.">
+            <Section title="Probar SMS" description="Envía el mensaje con datos de ejemplo. Consume 1 crédito.">
               <ActionForm action={sendTestSms} className="space-y-3">
                 <div className="flex gap-2">
                   <input name="phone" type="tel" className="input" placeholder="315 555 1234" required />
@@ -153,6 +157,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </Section>
           </>
         )}
+
+        {tab === "plan" && <PlanTab businessId={b.id} />}
 
         {tab === "usuarios" && <UsersTab businessId={b.id} currentUserId={user.id} />}
 
@@ -271,6 +277,85 @@ curl -X PATCH ${appUrl()}/api/v1/orders/{id} \\
   -d '{"status":"READY"}'`}</pre>
         <p className="mt-2 text-sm text-slate-500">Documentación completa en <code>docs/API.md</code>.</p>
       </Section>
+    </>
+  );
+}
+
+async function PlanTab({ businessId }: { businessId: string }) {
+  const [c, requests, movements] = await Promise.all([
+    getCreditSummary(prisma, businessId),
+    prisma.creditRequest.findMany({ where: { businessId }, orderBy: { createdAt: "desc" }, take: 10 }),
+    prisma.smsCreditTransaction.findMany({ where: { businessId, type: { notIn: ["USAGE", "REFUND"] } }, orderBy: { createdAt: "desc" }, take: 10 }),
+  ]);
+  const planTotal = c.plan?.monthlySmsCredits ?? 0;
+  const pct = planTotal ? Math.min(100, Math.round((c.includedRemaining / planTotal) * 100)) : 0;
+  return (
+    <>
+      <Section title={c.plan ? `Plan ${c.plan.name}` : "Sin plan asignado"} description="Primero se usan los SMS incluidos del mes; cuando se acaban, los adicionales. Los adicionales no vencen.">
+        {c.low && (
+          <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Te quedan pocos SMS. Cuando se acaben, los pedidos seguirán funcionando pero los clientes no recibirán el aviso por SMS.
+          </p>
+        )}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <p className="text-sm text-slate-500">Incluidos este mes</p>
+            <p className="text-3xl font-extrabold tabular-nums">{c.includedRemaining.toLocaleString("es-CO")}<span className="text-base font-medium text-slate-400"> / {planTotal.toLocaleString("es-CO")}</span></p>
+            <div className="mt-2 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-brand-600" style={{ width: `${pct}%` }} /></div>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500">Adicionales</p>
+            <p className="text-3xl font-extrabold tabular-nums">{c.extraBalance.toLocaleString("es-CO")}</p>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500">Usados este mes</p>
+            <p className="text-3xl font-extrabold tabular-nums">{c.usedThisPeriod.toLocaleString("es-CO")}</p>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Solicitar recarga" description="Pide más SMS. Te confirmaremos el pago y los créditos se acreditarán a tu cuenta.">
+        <ActionForm action={requestCredits}>
+          <div className="grid gap-3 sm:grid-cols-[180px_1fr_auto] sm:items-end">
+            <div>
+              <label className="label" htmlFor="amount">Cantidad de SMS</label>
+              <select id="amount" name="amount" className="input" defaultValue="1000">
+                {[500, 1000, 2000, 5000, 10000].map((n) => <option key={n} value={n}>{n.toLocaleString("es-CO")}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label" htmlFor="note">Nota (opcional)</label>
+              <input id="note" name="note" maxLength={200} className="input" placeholder="Ej. referencia de la transferencia" />
+            </div>
+            <SubmitButton pendingText="Enviando…">Solicitar</SubmitButton>
+          </div>
+        </ActionForm>
+        {requests.length > 0 && (
+          <ul className="mt-5 divide-y divide-slate-100 border-t border-slate-100 text-sm">
+            {requests.map((r) => (
+              <li key={r.id} className="flex justify-between py-2.5">
+                <span>{r.amount.toLocaleString("es-CO")} SMS · {formatDate(r.createdAt, "America/Bogota")}</span>
+                <span className={`badge ${r.status === "APPROVED" ? "bg-emerald-100 text-emerald-800" : r.status === "PENDING" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-500"}`}>
+                  {r.status === "APPROVED" ? "Acreditada" : r.status === "PENDING" ? "Pendiente" : "Rechazada"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      {movements.length > 0 && (
+        <Section title="Movimientos">
+          <ul className="divide-y divide-slate-100 text-sm">
+            {movements.map((t) => (
+              <li key={t.id} className="flex justify-between py-2.5">
+                <span>{TX_LABEL[t.type] ?? t.type} <span className="text-slate-400">· {formatDate(t.createdAt, "America/Bogota")}</span></span>
+                <span className={`font-semibold tabular-nums ${t.amount > 0 ? "text-emerald-700" : "text-red-600"}`}>{t.amount > 0 ? "+" : ""}{t.amount.toLocaleString("es-CO")}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
     </>
   );
 }

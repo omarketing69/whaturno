@@ -6,7 +6,7 @@ import { STATUS_LABEL, type OrderStatus } from "@/lib/constants";
 export async function businessForDisplay(businessId: string, token: string) {
   if (businessId.length > 40 || token.length > 64) return null;
   const business = await prisma.business.findUnique({ where: { id: businessId } });
-  if (!business || !safeEqual(business.displayToken, token)) return null;
+  if (!business || business.status !== "ACTIVE" || !safeEqual(business.displayToken, token)) return null;
   return business;
 }
 

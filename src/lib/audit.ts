@@ -1,6 +1,6 @@
 import { prisma } from "./db";
 
-export type Actor = `user:${string}` | `apikey:${string}` | "public" | "system";
+export type Actor = `user:${string}` | `apikey:${string}` | `platform:${string}` | "public" | "system";
 
 /** Registro de acciones importantes. Nunca debe romper el flujo principal. */
 export async function audit(entry: {

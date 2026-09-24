@@ -41,6 +41,15 @@ model Business {
   // Token secreto de la pantalla pública: /business/{id}/display/{displayToken}
   displayToken String @unique
 
+  // Suscripción SaaS (administrada por el superadmin)
+  status               String  @default("ACTIVE") // ACTIVE | SUSPENDED
+  planId               String?
+  plan                 Plan?   @relation(fields: [planId], references: [id])
+  // Créditos SMS: primero se gastan los incluidos del mes, luego los adicionales
+  smsIncludedRemaining Int     @default(0)
+  smsIncludedPeriod    String? // YYYY-MM (zona del negocio) al que corresponden los incluidos
+  smsExtraBalance      Int     @default(0) // recargas; no vencen
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -51,6 +60,8 @@ model Business {
   consents      Consent[]
   apiKeys       ApiKey[]
   auditLogs     AuditLog[]
+  creditLedger  SmsCreditTransaction[]
+  creditRequests CreditRequest[]
 }
 
 model User {
@@ -195,4 +206,74 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([businessId, createdAt])
+}
+
+// ───────────── Plataforma SaaS (superadmin) ─────────────
+
+model Plan {
+  id                String     @id @default(cuid())
+  name              String
+  monthlySmsCredits Int
+  priceMonthly      Int        @default(0) // informativo, en la moneda de la plataforma
+  isDefault         Boolean    @default(false) // plan asignado al registrarse
+  active            Boolean    @default(true)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  businesses        Business[]
+}
+
+// Libro de movimientos de créditos SMS: base para facturar y auditar.
+model SmsCreditTransaction {
+  id             String   @id @default(cuid())
+  businessId     String
+  business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  type           String // MONTHLY_GRANT | TOPUP | USAGE | REFUND | ADJUSTMENT
+  bucket         String // INCLUDED | EXTRA
+  amount         Int // positivo suma, negativo resta
+  period         String? // YYYY-MM
+  notificationId String?
+  note           String?
+  actor          String // platform:<id> | system | user:<id>
+  createdAt      DateTime @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([businessId, type, period])
+}
+
+// Un negocio pide una recarga; el superadmin la aprueba tras recibir el pago (fuera de la app).
+model CreditRequest {
+  id          String    @id @default(cuid())
+  businessId  String
+  business    Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  amount      Int
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  note        String?
+  requestedBy String // userId
+  resolvedBy  String? // platformAdminId
+  resolvedAt  DateTime?
+  resolution  String?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, createdAt])
+  @@index([businessId, createdAt])
+}
+
+// Operador de la plataforma. Separado de User: no pertenece a ningún negocio.
+model PlatformAdmin {
+  id           String            @id @default(cuid())
+  name         String
+  email        String            @unique
+  passwordHash String
+  active       Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  sessions     PlatformSession[]
+}
+
+model PlatformSession {
+  id        String        @id @default(cuid())
+  adminId   String
+  admin     PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  tokenHash String        @unique
+  expiresAt DateTime
+  createdAt DateTime      @default(now())
 }

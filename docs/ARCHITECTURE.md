@@ -57,6 +57,14 @@ src/
 
   Si un canal falla, se prueba el siguiente. Un fallo de notificación nunca revierte el cambio de estado; queda como `FAILED` con el error.
 - **Idempotencia de la API** por (negocio, origen, `external_order_id`), para que los reintentos de integraciones no dupliquen pedidos.
+- **Superadmin separado.** Usa el modelo `PlatformAdmin`, con su propia tabla de sesiones y su propia cookie (`dt_platform`, `SameSite=Strict`, 12 h). No es un rol de `User`, así que un usuario de negocio nunca puede escalar a operador. Se crea solo por CLI (`pnpm admin:create`).
+- **Créditos SMS** (`src/domain/billing/credits.ts`):
+  - Hay dos bolsas: INCLUDED (del plan, se renueva cada mes y vence) y EXTRA (recargas, no vencen).
+  - La asignación mensual es perezosa y atómica: ocurre en el primer uso del mes, con una condición sobre el periodo anterior para que no se duplique.
+  - El consumo es una reserva atómica (`updateMany` con `saldo > 0`) antes de enviar. Si el proveedor falla, se registra una devolución (REFUND).
+  - Todo movimiento queda en `SmsCreditTransaction`: MONTHLY_GRANT, EXPIRE, USAGE, REFUND, TOPUP y ADJUSTMENT. Es la base para facturar.
+- **Cambio de plan.** Aplica de inmediato: los incluidos del mes pasan a ser los del nuevo plan menos los ya usados este mes.
+- **Suspensión.** Un negocio `SUSPENDED` no puede entrar (se redirige a `/suspended`), usar la API (responde 403) ni mostrar la pantalla pública, y no envía notificaciones.
 - **Rate limiting en memoria.** Sirve para una sola instancia. Con varias réplicas hay que moverlo a Redis.
 - **Logo por URL** (https). No se suben archivos en el MVP.
 
