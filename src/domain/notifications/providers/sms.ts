@@ -10,34 +10,43 @@ export class ConsoleSmsProvider implements SmsProvider {
 }
 
 /**
- * Bird (antes MessageBird) — Channels API.
- * Requiere SMS_API_KEY, BIRD_WORKSPACE_ID y BIRD_CHANNEL_ID (canal SMS; el remitente
- * se configura en el canal de Bird, SMS_SENDER queda como referencia).
+ * LabsMobile — API JSON (https://api.labsmobile.com/json/send).
+ * Autenticación Basic con el usuario de la cuenta (correo) y el token de API.
+ * Requiere LABSMOBILE_USERNAME y SMS_API_KEY; SMS_SENDER (remitente, máx. 11
+ * caracteres) es opcional. LABSMOBILE_TEST=1 activa el modo simulado (no envía ni cobra).
  */
-export class BirdSmsProvider implements SmsProvider {
-  readonly name = "bird";
+export class LabsMobileSmsProvider implements SmsProvider {
+  readonly name = "labsmobile";
   constructor(
-    private readonly apiKey: string,
-    private readonly workspaceId: string,
-    private readonly channelId: string,
+    private readonly username: string,
+    private readonly token: string,
+    private readonly sender?: string,
+    private readonly test = false,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   async send(phone: string, message: string): Promise<SendResult> {
-    const url = `https://api.bird.com/workspaces/${this.workspaceId}/channels/${this.channelId}/messages`;
     try {
-      const res = await this.fetchImpl(url, {
+      const res = await this.fetchImpl("https://api.labsmobile.com/json/send", {
         method: "POST",
-        headers: { Authorization: `AccessKey ${this.apiKey}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: "Basic " + Buffer.from(`${this.username}:${this.token}`).toString("base64"),
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          receiver: { contacts: [{ identifierValue: phone }] },
-          body: { type: "text", text: { text: message } },
+          message,
+          // LabsMobile espera el número E.164 sin el "+"
+          recipient: [{ msisdn: phone.replace(/^\+/, "") }],
+          ...(this.sender && { tpoa: this.sender }),
+          ...(this.test && { test: 1 }),
         }),
         signal: AbortSignal.timeout(10_000),
       });
-      const data = (await res.json().catch(() => ({}))) as { id?: string; message?: string };
-      if (!res.ok) return { ok: false, provider: this.name, error: data.message || `HTTP ${res.status}` };
-      return { ok: true, provider: this.name, providerMessageId: data.id };
+      const data = (await res.json().catch(() => ({}))) as { code?: string | number; message?: string; subid?: string };
+      if (!res.ok || String(data.code) !== "0") {
+        return { ok: false, provider: this.name, error: `LabsMobile ${data.code ?? res.status}: ${data.message ?? res.statusText}` };
+      }
+      return { ok: true, provider: this.name, providerMessageId: data.subid };
     } catch (err) {
       return { ok: false, provider: this.name, error: err instanceof Error ? err.message : String(err) };
     }
@@ -45,13 +54,13 @@ export class BirdSmsProvider implements SmsProvider {
 }
 
 /** Crea el proveedor SMS según variables de entorno. */
-export function smsProviderFromEnv(env = process.env): SmsProvider {
+export function smsProviderFromEnv(env: Record<string, string | undefined> = process.env): SmsProvider {
   switch ((env.SMS_PROVIDER || "console").toLowerCase()) {
-    case "bird":
-      if (!env.SMS_API_KEY || !env.BIRD_WORKSPACE_ID || !env.BIRD_CHANNEL_ID) {
-        throw new Error("SMS_PROVIDER=bird requiere SMS_API_KEY, BIRD_WORKSPACE_ID y BIRD_CHANNEL_ID");
+    case "labsmobile":
+      if (!env.LABSMOBILE_USERNAME || !env.SMS_API_KEY) {
+        throw new Error("SMS_PROVIDER=labsmobile requiere LABSMOBILE_USERNAME y SMS_API_KEY");
       }
-      return new BirdSmsProvider(env.SMS_API_KEY, env.BIRD_WORKSPACE_ID, env.BIRD_CHANNEL_ID);
+      return new LabsMobileSmsProvider(env.LABSMOBILE_USERNAME, env.SMS_API_KEY, env.SMS_SENDER || undefined, env.LABSMOBILE_TEST === "1");
     case "console":
       return new ConsoleSmsProvider();
     default:

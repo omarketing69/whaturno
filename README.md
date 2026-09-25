@@ -76,7 +76,13 @@ La plataforma tiene **una sola cuenta de SMS**, configurada por ti en las variab
 
 - **SMS** (canal principal): una sola cuenta para toda la plataforma, configurada en `.env` o en las variables del hosting.
   - `SMS_PROVIDER=console` imprime los mensajes en la consola del servidor. Es la opción de desarrollo.
-  - `SMS_PROVIDER=bird` los envía de verdad y requiere tres datos de tu cuenta de Bird: `SMS_API_KEY` (Access Key), `BIRD_WORKSPACE_ID` y `BIRD_CHANNEL_ID` (el canal SMS). Hay que reiniciar el servidor después de cambiarlos.
+  - `SMS_PROVIDER=labsmobile` los envía de verdad con [LabsMobile](https://www.labsmobile.com). Requiere:
+    - `LABSMOBILE_USERNAME`: el usuario de tu cuenta (el correo).
+    - `SMS_API_KEY`: el token de API que generas en el panel de LabsMobile.
+    - `SMS_SENDER` (opcional): el remitente, de máximo 11 caracteres.
+    - `LABSMOBILE_TEST=1` (opcional): prueba sin enviar ni gastar saldo.
+
+    Hay que reiniciar el servidor después de cambiarlos.
   - Para agregar otro proveedor, implementa `SmsProvider` en `src/domain/notifications/providers/sms.ts`.
 - **Telegram** (opcional): configura `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` y `TELEGRAM_WEBHOOK_SECRET`, y registra el webhook:
 
@@ -97,6 +103,8 @@ PATCH /api/v1/orders/{id}   { status: "READY" }   → notifica al cliente
 ```
 
 ## Producción
+
+En **Replit**, estas variables van en **Secrets** (no en el archivo `.env`): `DATABASE_URL`, `APP_URL`, `SMS_PROVIDER=labsmobile`, `LABSMOBILE_USERNAME`, `SMS_API_KEY` y, si lo usas, `SMS_SENDER`.
 
 1. En `prisma/schema.prisma`, cambia `provider = "sqlite"` por `"postgresql"` y apunta `DATABASE_URL` a tu base.
 2. Define `APP_URL` con tu dominio. Se usa en los links de seguimiento y en el QR.
